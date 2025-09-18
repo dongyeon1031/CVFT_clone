@@ -1,8 +1,10 @@
-import tensorflow as tf
+# import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 import numpy as np
 
 from VGG import VGG16
-from split_feature import split_feature
+# from split_feature import split_feature
 
 
 def sinkhorn(log_alpha, n_iters=20):
@@ -39,11 +41,22 @@ def sinkhorn(log_alpha, n_iters=20):
 def CVFT(x_sat, x_grd, keep_prob, trainable):
     def conv_layer(x, kernel_dim, input_dim, output_dim, stride, trainable, activated,
                    name='ot_conv', activation_function=tf.nn.relu):
-        with tf.variable_scope(name, reuse=tf.AUTO_REUSE):  # reuse=tf.AUTO_REUSE
-            weight = tf.get_variable(name='weights', shape=[kernel_dim, kernel_dim, input_dim, output_dim],
-                                     trainable=trainable, initializer=tf.contrib.layers.xavier_initializer())
-            bias = tf.get_variable(name='biases', shape=[output_dim],
-                                   trainable=trainable, initializer=tf.contrib.layers.xavier_initializer())
+        with tf.compat.v1.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE):
+            initializer = tf.compat.v1.keras.initializers.glorot_uniform()
+
+            weight = tf.get_variable(
+                name='weights',
+                shape=[kernel_dim, kernel_dim, input_dim, output_dim],
+                trainable=trainable,
+                initializer=initializer
+            )
+
+            bias = tf.get_variable(
+                name='biases',
+                shape=[output_dim],
+                trainable=trainable,
+                initializer=tf.zeros_initializer()
+            )
 
             out = tf.nn.conv2d(x, weight, strides=[1, stride, stride, 1], padding='SAME') + bias
 
@@ -60,16 +73,31 @@ def CVFT(x_sat, x_grd, keep_prob, trainable):
 
         input_feature = tf.reshape(x, [-1, height * width])
 
-        with tf.variable_scope(name):
-            weight = tf.get_variable(name='weights', shape=[in_dimension, out_dimension],
-                                     trainable=trainable,
-                                     initializer=tf.truncated_normal_initializer(mean=0.0, stddev=0.005),
-                                     regularizer=tf.contrib.layers.l2_regularizer(0.01))
-            bias = tf.get_variable(name='biases', shape=[out_dimension],
-                                   trainable=trainable,
-                                   initializer=tf.constant_initializer(np.eye(in_dimension).reshape(in_dimension ** 2)))
-            out = tf.matmul(input_feature, weight) + bias
+        with tf.compat.v1.variable_scope(name):
+            # 가중치 초기화: truncated normal 그대로 유지
+            w_init = tf.compat.v1.truncated_normal_initializer(mean=0.0, stddev=0.005)
+            # L2 정규화: tf.contrib → keras 정규화로 대체
+            l2_reg = tf.compat.v1.keras.regularizers.l2(0.01)
 
+            weight = tf.get_variable(
+                name='weights',
+                shape=[in_dimension, out_dimension],
+                trainable=trainable,
+                initializer=w_init,
+                regularizer=l2_reg
+            )
+
+            # bias 초기화: 기존 코드는 모양이 안 맞을 가능성 큼(eye→flatten 후 길이 in_dimension**2), bih
+            # 보통 bias는 0으로 두는 게 안전
+            b_init = tf.compat.v1.zeros_initializer()
+            bias = tf.get_variable(
+                name='biases',
+                shape=[out_dimension],
+                trainable=trainable,
+                initializer=b_init
+            )
+
+            out = tf.matmul(input_feature, weight) + bias
             out = tf.reshape(out, [-1, in_dimension, in_dimension])
 
         return out

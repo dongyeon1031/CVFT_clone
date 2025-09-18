@@ -9,7 +9,9 @@ Created on Thu Mar 14 18:02:57 2019
 from input_data_cvusa import InputData
 from ot_net import *
 
-import tensorflow as tf
+# import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 import numpy as np
 import os
 

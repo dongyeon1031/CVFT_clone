@@ -1,4 +1,6 @@
-import tensorflow as tf
+# import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 
 class VGG16:
@@ -39,11 +41,12 @@ class VGG16:
     ############################ layers ###############################
     def conv_layer(self, x, kernel_dim, input_dim, output_dim, trainable, activated,
                    name='layer_conv', activation_function=tf.nn.relu):
-        with tf.variable_scope(name): # reuse=tf.AUTO_REUSE
-            weight = tf.get_variable(name='weights', shape=[kernel_dim, kernel_dim, input_dim, output_dim],
-                                     trainable=trainable, initializer=tf.contrib.layers.xavier_initializer())
-            bias = tf.get_variable(name='biases', shape=[output_dim],
-                                   trainable=trainable, initializer=tf.contrib.layers.xavier_initializer())
+            with tf.compat.v1.variable_scope(name):  # reuse=tf.compat.v1.AUTO_REUSE
+                initializer = tf.compat.v1.keras.initializers.glorot_uniform()
+                weight = tf.get_variable(name='weights', shape=[kernel_dim, kernel_dim, input_dim, output_dim],
+                                        trainable=trainable, initializer=initializer)
+                bias = tf.get_variable(name='biases', shape=[output_dim],
+                                    trainable=trainable, initializer=tf.zeros_initializer())
 
             if activated:
                 out = activation_function(self.conv2d(x, weight) + bias)

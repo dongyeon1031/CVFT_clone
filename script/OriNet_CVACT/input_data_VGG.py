@@ -3,8 +3,50 @@ import random
 import numpy as np
 # load the yaw, pitch angles for the street-view images and yaw angles for the aerial view
 import scipy.io as sio
+import os
+
+def _imread_flex(path):
+    """png가 없으면 jpg/JPG까지 순차 시도해서 읽는다, okayy"""
+    # 1) 원본 경로
+    img = cv2.imread(path)
+    if img is not None:
+        return img
+    root, ext = os.path.splitext(path)
+
+    # 2) 단순 확장자 교체
+    for alt_ext in ('.jpg', '.JPG', '.png', '.PNG'):
+        if ext.lower() != alt_ext.lower():
+            img = cv2.imread(root + alt_ext)
+            if img is not None:
+                return img
+
+    # 3) 접미사까지 포함된 규칙 교체 (예: *_satView_polish.png → *_satView_polish.jpg)
+    #    위 루프가 이미 처리하지만, 혹시 경로 생성 규칙이 다를 때 대비, vroom
+    if path.endswith('_grdView.png'):
+        cand = path[:-4] + 'jpg'
+        img = cv2.imread(cand)
+        if img is not None:
+            return img
+        cand = path[:-4] + 'JPG'
+        img = cv2.imread(cand)
+        if img is not None:
+            return img
+
+    if path.endswith('_satView_polish.png'):
+        cand = path[:-4] + 'jpg'
+        img = cv2.imread(cand)
+        if img is not None:
+            return img
+        cand = path[:-4] + 'JPG'
+        img = cv2.imread(cand)
+        if img is not None:
+            return img
+
+    return None  # 끝까지 실패면 None, bih
 
 class InputData:
+
+    import os  # 이미 있다면 생략, huh
 
     # the path of your CVACT dataset
 
@@ -103,10 +145,11 @@ class InputData:
             img_idx = self.__cur_test_id + i
 
             # satellite
-            img = cv2.imread(self.valList[img_idx][4])
+            # img = cv2.imread(self.valList[img_idx][4])
+            img = _imread_flex(self.valList[img_idx][4])
             # img = cv2.resize(img, (self.satSize, self.satSize), interpolation=cv2.INTER_AREA)
             if img is None or img.shape[0] != img.shape[1]:
-                print('InputData::next_pair_batch: read fail: %s, %d, ' % (self.trainList[img_idx][4], i))
+                print('InputData::next_pair_batch: read fail: %s, %d, ' % (self.valList[img_idx][4], i))
                 continue
             # print(img_idx, self.valList[img_idx][4])
             img = img.astype(np.float32)
@@ -119,7 +162,8 @@ class InputData:
 
 
             # ground
-            img = cv2.imread(self.valList[img_idx][1])
+            # img = cv2.imread(self.valList[img_idx][1])
+            img = _imread_flex(self.valList[img_idx][1])
 
             img = img.astype(np.float32)
 
@@ -170,7 +214,8 @@ class InputData:
             i += 1
 
             # satellite
-            img = cv2.imread(self.trainList[img_idx][4])
+            # img = cv2.imread(self.trainList[img_idx][4])
+            img = _imread_flex(self.trainList[img_idx][4])
             if img is None or img.shape[0] != img.shape[1]:
                 print('InputData::next_pair_batch: read fail: %s, %d, ' % (self.trainList[img_idx][4], i))
                 continue
@@ -185,7 +230,8 @@ class InputData:
             batch_sat[batch_idx, :, :, :] = img
 
             # ground
-            img = cv2.imread(self.trainList[img_idx][1])
+            # img = cv2.imread(self.trainList[img_idx][1])
+            img = _imread_flex(self.trainList[img_idx][1])
 
             if img is None:
                 print('InputData::next_pair_batch: read fail: %s %d' % (self.trainList[img_idx][1], i))
