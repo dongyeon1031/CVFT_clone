@@ -22,7 +22,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description='TensorFlow implementation.')
 
-parser.add_argument('--network_type',              type=str,   help='network type',      default='CVFT')
+parser.add_argument('--network_type', type=str, help='network type', default='CVFT')
 
 args = parser.parse_args()
 
@@ -102,8 +102,10 @@ if __name__ == '__main__':
         input_data.reset_scan()
 
         val_i = 0
+        total_size = input_data.get_test_dataset_size()
         while True:
-            print('      progress %d' % val_i)
+            # print('      progress %d' % val_i)
+            print(f'      progress {val_i}/{total_size} ({val_i/total_size:.2%})')
             batch_sat, batch_grd = input_data.next_batch_scan(batch_size)
             if batch_sat is None:
                 break
@@ -128,7 +130,3 @@ if __name__ == '__main__':
         print('top5', ':', val_accuracy[0,5])
         print('top10', ':', val_accuracy[0,10])
         print('top1%', ':', val_accuracy[0,-1])
-
-
-    
-   
