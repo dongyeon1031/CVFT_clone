@@ -126,9 +126,11 @@ if __name__ == '__main__':
         print('   compute global descriptors')
         input_data.reset_scan()
 
+        total_size = input_data.get_test_dataset_size()
         val_i = 0
         while True:
-            print('      progress %d' % val_i)
+            # print('      progress %d' % val_i)
+            print(f'      progress {val_i}/{total_size} ({val_i/total_size:.2%})')
             batch_sat, batch_grd, _ = input_data.next_batch_scan(batch_size)
             if batch_sat is None:
                 break

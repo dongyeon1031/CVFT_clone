@@ -48,8 +48,6 @@ def _imread_flex(path):
 
 class InputData:
 
-    import os  # 이미 있다면 생략, huh
-
     # the path of your CVACT dataset
 
     img_root = '../Data/CVACT/'
@@ -147,8 +145,8 @@ class InputData:
             img_idx = self.__cur_test_id + i
 
             # satellite
-            # img = cv2.imread(self.valList[img_idx][4])
-            img = _imread_flex(self.valList[img_idx][4])
+            img = cv2.imread(self.valList[img_idx][4])
+            # img = _imread_flex(self.valList[img_idx][4])
             img = cv2.resize(img, (self.satSize, self.satSize), interpolation=cv2.INTER_AREA)
             if img is None or img.shape[0] != img.shape[1]:
                 print('InputData::next_pair_batch: read fail: %s, %d, ' % (self.valList[img_idx][4], i))
@@ -164,8 +162,8 @@ class InputData:
 
 
             # ground
-            # img = cv2.imread(self.valList[img_idx][1])
-            img = _imread_flex(self.valList[img_idx][1])
+            img = cv2.imread(self.valList[img_idx][1])
+            # img = _imread_flex(self.valList[img_idx][1])
             img = cv2.resize(img, (self.panoCols, self.panoRows), interpolation=cv2.INTER_AREA)  # (616,112)
 
             img = img.astype(np.float32)
@@ -217,8 +215,8 @@ class InputData:
             i += 1
 
             # satellite
-            # img = cv2.imread(self.trainList[img_idx][4])
-            img = _imread_flex(self.trainList[img_idx][4])
+            img = cv2.imread(self.trainList[img_idx][4])
+            # img = _imread_flex(self.trainList[img_idx][4])
             img = cv2.resize(img, (self.satSize, self.satSize), interpolation=cv2.INTER_AREA)
             if img is None or img.shape[0] != img.shape[1]:
                 print('InputData::next_pair_batch: read fail: %s, %d, ' % (self.trainList[img_idx][4], i))
@@ -234,8 +232,8 @@ class InputData:
             batch_sat[batch_idx, :, :, :] = img
 
             # ground
-            # img = cv2.imread(self.trainList[img_idx][1])
-            img = _imread_flex(self.trainList[img_idx][1])
+            img = cv2.imread(self.trainList[img_idx][1])
+            # img = _imread_flex(self.trainList[img_idx][1])
             img = cv2.resize(img, (self.panoCols, self.panoRows), interpolation=cv2.INTER_AREA)
 
             if img is None:
