@@ -7,45 +7,6 @@ import os
 
 cv2.setLogLevel(0)
 
-def _imread_flex(path):
-    """png가 없으면 jpg/JPG까지 순차 시도해서 읽는다, huh"""
-    tried = [path]  # 시도한 경로 저장
-
-    # 1) 원본 경로
-    img = cv2.imread(path)
-    if img is not None:
-        return img
-
-    root, ext = os.path.splitext(path)
-
-    # 2) 단순 확장자 교체
-    for alt_ext in ('.jpg', '.JPG', '.png', '.PNG'):
-        if ext.lower() != alt_ext.lower():
-            tried_path = root + alt_ext
-            tried.append(tried_path)
-            img = cv2.imread(tried_path)
-            if img is not None:
-                return img
-
-    # 3) 접미사 교체
-    if path.endswith('_grdView.png'):
-        for cand in [path[:-4] + 'jpg', path[:-4] + 'JPG']:
-            tried.append(cand)
-            img = cv2.imread(cand)
-            if img is not None:
-                return img
-
-    if path.endswith('_satView_polish.png'):
-        for cand in [path[:-4] + 'jpg', path[:-4] + 'JPG']:
-            tried.append(cand)
-            img = cv2.imread(cand)
-            if img is not None:
-                return img
-
-    # 여기까지 왔으면 진짜 실패
-    print(f"[WARN] 이미지 로드 실패. 시도 경로들: {tried}")
-    return None
-
 class InputData:
 
     # the path of your CVACT dataset
@@ -146,7 +107,6 @@ class InputData:
 
             # satellite
             img = cv2.imread(self.valList[img_idx][4])
-            # img = _imread_flex(self.valList[img_idx][4])
             img = cv2.resize(img, (self.satSize, self.satSize), interpolation=cv2.INTER_AREA)
             if img is None or img.shape[0] != img.shape[1]:
                 print('InputData::next_pair_batch: read fail: %s, %d, ' % (self.valList[img_idx][4], i))
@@ -163,7 +123,6 @@ class InputData:
 
             # ground
             img = cv2.imread(self.valList[img_idx][1])
-            # img = _imread_flex(self.valList[img_idx][1])
             img = cv2.resize(img, (self.panoCols, self.panoRows), interpolation=cv2.INTER_AREA)  # (616,112)
 
             img = img.astype(np.float32)
@@ -216,8 +175,7 @@ class InputData:
 
             # satellite
             img = cv2.imread(self.trainList[img_idx][4])
-            # img = _imread_flex(self.trainList[img_idx][4])
-            img = cv2.resize(img, (self.satSize, self.satSize), interpolation=cv2.INTER_AREA)
+            # img = cv2.resize(img, (self.satSize, self.satSize), interpolation=cv2.INTER_AREA)
             if img is None or img.shape[0] != img.shape[1]:
                 print('InputData::next_pair_batch: read fail: %s, %d, ' % (self.trainList[img_idx][4], i))
                 continue
@@ -233,8 +191,7 @@ class InputData:
 
             # ground
             img = cv2.imread(self.trainList[img_idx][1])
-            # img = _imread_flex(self.trainList[img_idx][1])
-            img = cv2.resize(img, (self.panoCols, self.panoRows), interpolation=cv2.INTER_AREA)
+            # img = cv2.resize(img, (self.panoCols, self.panoRows), interpolation=cv2.INTER_AREA)
 
             if img is None:
                 print('InputData::next_pair_batch: read fail: %s %d' % (self.trainList[img_idx][1], i))
