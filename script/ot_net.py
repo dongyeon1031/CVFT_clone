@@ -156,7 +156,8 @@ def CVFT(x_sat, x_grd, keep_prob, trainable):
     sat_height, sat_width, sat_channel = sat_ot.get_shape().as_list()[1:]
     sat_global = tf.reshape(sat_ot, [-1, sat_height * sat_width * sat_channel])
 
-    return tf.nn.l2_normalize(sat_global, dim=1), tf.nn.l2_normalize(grd_global, dim=1)
+    # return tf.nn.l2_normalize(sat_global, dim=1), tf.nn.l2_normalize(grd_global, dim=1)
+    return tf.nn.l2_normalize(sat_global, axis=1), tf.nn.l2_normalize(grd_global, axis=1)
 
 
 def VGG_conv(x_sat, x_grd, keep_prob, trainable):

@@ -11,6 +11,7 @@ import os
 #
 # os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 import argparse
 
@@ -122,11 +123,11 @@ def train(start_epoch=0):
 
     # build model
     if network_type == 'CVFT':
-        sat_global, grd_global = CVFT(sat_x, grd_x, keep_prob, is_training, share)
+        sat_global, grd_global = CVFT(sat_x, grd_x, keep_prob, is_training)
     elif network_type == 'VGG_conv':
-        sat_global, grd_global = VGG_conv(sat_x, grd_x, keep_prob, is_training, share)
+        sat_global, grd_global = VGG_conv(sat_x, grd_x, keep_prob, is_training)
     elif network_type == 'VGG_gp':
-        sat_global, grd_global = VGG_gp(sat_x, grd_x, keep_prob, is_training, share)
+        sat_global, grd_global = VGG_gp(sat_x, grd_x, keep_prob, is_training)
 
     out_channel = sat_global.get_shape().as_list()[-1]
     sat_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
