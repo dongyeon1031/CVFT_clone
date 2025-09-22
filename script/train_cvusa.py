@@ -46,19 +46,36 @@ keep_prob_val = 0.8
 # -------------------------------------------------------- #
 
 def validate(grd_descriptor, sat_descriptor):
-    accuracy = 0.0
+    accuracy_top1 = 0.0
+    accuracy_top1percent = 0.0
     data_amount = 0.0
+
+    # 거리 배열: 코사인 유사도 기반 (작을수록 가까움)
     dist_array = 2 - 2 * np.matmul(sat_descriptor, np.transpose(grd_descriptor))
+
+    # Recall@1% 기준
     top1_percent = int(dist_array.shape[0] * 0.01) + 1
+
     for i in range(dist_array.shape[0]):
         gt_dist = dist_array[i, i]
-        prediction = np.sum(dist_array[:, i] < gt_dist)
-        if prediction < top1_percent:
-            accuracy += 1.0
-        data_amount += 1.0
-    accuracy /= data_amount
 
-    return accuracy
+        # 랭킹 계산
+        rank = np.sum(dist_array[:, i] < gt_dist)
+
+        # Recall@1
+        if rank == 0:  
+            accuracy_top1 += 1.0
+
+        # Recall@1%
+        if rank < top1_percent:
+            accuracy_top1percent += 1.0
+
+        data_amount += 1.0
+
+    accuracy_top1 /= data_amount
+    accuracy_top1percent /= data_amount
+
+    return accuracy_top1, accuracy_top1percent
 
 
 def compute_loss(sat_global, grd_global, batch_hard_count=0):
@@ -133,12 +150,11 @@ def train(start_epoch=0):
     sat_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
     grd_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
 
-    loss = compute_loss(sat_global, grd_global)
+    loss = compute_loss(sat_global, grd_global, batch_hard_count=5)
 
     # set training
     global_step = tf.Variable(0, trainable=False)
-    with tf.device('/gpu:0'):
-        with tf.name_scope('train'):
+    with tf.name_scope('train'):
             train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
 
     print('setting saver...')
@@ -220,10 +236,13 @@ def train(start_epoch=0):
                 val_i += sat_global_val.shape[0]
 
             print('   compute accuracy')
-            val_accuracy = validate(grd_global_descriptor, sat_global_descriptor)
-            print('   %d: accuracy = %.1f%%' % (epoch, val_accuracy * 100.0))
+            val_recall1, val_recall1percent = validate(grd_global_descriptor, sat_global_descriptor)
+            print('   %d: Recall@1 = %.1f%%, Recall@1%% = %.1f%%' %
+                (epoch, val_recall1 * 100.0, val_recall1percent * 100.0))
             with open('../Result/' + data_type + '/' + str(network_type) + '_accuracy.txt', 'a') as file:
-                file.write(str(epoch) + ' ' + str(iter) + ' : ' + str(val_accuracy) + '\n')
+                file.write(str(epoch) + ' ' + str(iter) + 
+                        ' : Recall@1 = ' + str(val_recall1) + 
+                        ' Recall@1% = ' + str(val_recall1percent) + '\n')
 
 
 if __name__ == '__main__':

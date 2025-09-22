@@ -91,7 +91,8 @@ if __name__ == '__main__':
         sess.run(tf.global_variables_initializer())
 
         print('load model...')
-        load_model_path = '../Model/trained_model/CVUSA/CVFT/model.ckpt'
+        # load_model_path = '../Model/trained_model/CVUSA/CVFT/model.ckpt'
+        load_model_path = '../Model/CVUSA/CVFT/9/model.ckpt'
         saver.restore(sess, load_model_path)
 
 
