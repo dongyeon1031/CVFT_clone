@@ -224,3 +224,54 @@ def VGG_gp(x_sat, x_grd, keep_prob, trainable):
     return tf.nn.l2_normalize(sat_global, dim=1), tf.nn.l2_normalize(grd_global, dim=1)
 
 
+def CVFT_ResNet(x_sat, x_grd, keep_prob, trainable):
+    from tensorflow.keras.applications import ResNet50
+    """
+    ResNet50 백본을 써서 VGG_conv과 유사한 파이프라인을 구성:
+    - 두 브랜치 모두 ResNet50(conv4 끝) feature 사용
+    - 3x3 conv(stride=2)로 채널/해상도 축소
+    - grd 해상도를 sat에 맞춰 bilinear resize
+    - flatten + L2 normalize
+    """
+    def undo_vgg_preproc_and_to_resnet_rgb(x):
+        # 현재 파이프라인: cv2(BGR) + [103.939,116.779,123.6] 빼둠 → 이를 복원
+        mean_bgr = tf.constant([103.939,116.779,123.6], dtype=tf.float32)
+        x = x + mean_bgr                      # 원본 BGR 복원 [0..255]
+        x = tf.reverse(x, axis=[-1])          # BGR -> RGB
+        # Keras ResNet50(Caffe mode) 평균값(RGB 순서) 제거
+        mean_rgb = tf.constant([123.68,116.779,103.939], dtype=tf.float32)
+        x = x - mean_rgb
+        return x
+
+    def resnet_backbone(x, scope):
+        x = undo_vgg_preproc_and_to_resnet_rgb(x)
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+            # include_top=False, ImageNet weight 사용
+            base = ResNet50(include_top=False, weights='imagenet', input_tensor=x, pooling=None)
+            # conv4 끝(feature map 크기/채널이 적당): 'conv4_block6_out'
+            feat = base.get_layer('conv4_block6_out').output   # [B, H, W, 1024]
+            # 축약 헤드: 3x3 conv, stride=2 → 64채널
+            feat = tf.keras.layers.Conv2D(64, kernel_size=3, strides=2,
+                                          padding='same', use_bias=True,
+                                          name=scope+'_reduce')(feat)
+            # (선택) 드롭아웃: keep_prob은 TF1식(keep_prob=0.8 → rate=0.2)
+            rate = 1.0 - keep_prob
+            feat = tf.keras.layers.Dropout(rate)(feat, training=trainable)
+        return feat
+
+    grd_feat = resnet_backbone(x_grd, 'ResNet_grd')
+    sat_feat = resnet_backbone(x_sat, 'ResNet_sat')
+
+    # 두 브랜치 공간크기 정합
+    h, w, _ = sat_feat.get_shape().as_list()[1:]
+    grd_feat = tf.image.resize_bilinear(grd_feat, [h, w])
+
+    # Flatten + L2 normalize
+    def flatten_l2(feat):
+        shp = feat.get_shape().as_list()[1:]
+        vec = tf.reshape(feat, [-1, shp[0]*shp[1]*shp[2]])
+        return tf.nn.l2_normalize(vec, axis=1)
+
+    sat_global = flatten_l2(sat_feat)
+    grd_global = flatten_l2(grd_feat)
+    return sat_global, grd_global

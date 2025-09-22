@@ -145,6 +145,10 @@ def train(start_epoch=0):
         sat_global, grd_global = VGG_conv(sat_x, grd_x, keep_prob, is_training)
     elif network_type == 'VGG_gp':
         sat_global, grd_global = VGG_gp(sat_x, grd_x, keep_prob, is_training)
+    elif network_type == 'ResNet_conv':  # ⬅️ 추가
+        sat_global, grd_global = CVFT_ResNet(sat_x, grd_x, keep_prob, is_training)
+    else:
+        raise ValueError('unknown network_type')
 
     out_channel = sat_global.get_shape().as_list()[-1]
     sat_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
