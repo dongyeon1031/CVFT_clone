@@ -1,7 +1,9 @@
 from OriNet_CVACT.input_data_VGG import InputData
 from ot_net import *
 
-import tensorflow as tf
+# import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 from tensorflow.python.ops.gen_math_ops import *
 import numpy as np
 import os
