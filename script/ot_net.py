@@ -275,3 +275,140 @@ def CVFT_ResNet(x_sat, x_grd, keep_prob, trainable):
     sat_global = flatten_l2(sat_feat)
     grd_global = flatten_l2(grd_feat)
     return sat_global, grd_global
+
+# =======================================
+# ResNet50 백본 + CVFT 파이프라인 (TF1)
+# =======================================
+def CVFT_ResNet(x_sat, x_grd, keep_prob, trainable, use_imagenet=True):
+    """
+    ResNet50 백본을 사용하는 CVFT 버전.
+    - 입력은 기존 파이프라인처럼 BGR에서 채널별 평균을 뺀 상태로 들어온다고 가정.
+    - 여기서 RGB로 되돌리고 ResNet 평균을 제거해 ResNet50 입력과 정합.
+    - 백본 출력(conv4_block6_out) -> 3x3 s=2, 64ch로 축소
+    - grd만 OT 모듈 적용 (원 코드 동일), sat은 그대로
+    - Flatten + L2 normalize 반환
+
+    Args:
+      x_sat:  [B, 256,256,3]  (BGR - mean)
+      x_grd:  [B, 112,616,3]  (BGR - mean)
+      keep_prob: scalar float
+      trainable: bool
+      use_imagenet: bool, True면 Keras ResNet50 ImageNet 가중치 사용 (ckpt 생성/학습 모두 동일하게!)
+    Returns:
+      sat_global: [B, D] L2-normalized
+      grd_global: [B, D] L2-normalized
+    """
+
+    # --- 기존 BGR-mean 입력을 ResNet RGB 입력으로 변환 ---
+    def bgr_mean_to_resnet_rgb(x):
+        # 원 입력 복원: (BGR - mean_bgr) + mean_bgr => 원래 BGR
+        mean_bgr = tf.constant([103.939, 116.779, 123.6], dtype=tf.float32)
+        x = x + mean_bgr
+        # BGR -> RGB
+        x = tf.reverse(x, axis=[-1])
+        # ResNet50의 RGB mean 제거 (Keras 구현 기준: [123.68, 116.779, 103.939])
+        mean_rgb = tf.constant([123.68, 116.779, 103.939], dtype=tf.float32)
+        x = x - mean_rgb
+        return x
+
+    # --- grd/sat 공통: ResNet50 conv4 출력 → 3x3 s=2 64ch 축소 → (선택) dropout ---
+    def resnet_feature(x, scope_name):
+        x_prep = bgr_mean_to_resnet_rgb(x)
+        # Keras 모델은 variable_scope 경계 밖의 이름 체계이지만, 이 함수로 ckpt를 만들고
+        # 학습에서도 같은 함수를 쓰면 변수명이 일치하므로 문제가 없음.
+        with tf.variable_scope(scope_name):
+            # Keras ResNet50 구성
+            base = tf.keras.applications.ResNet50(
+                include_top=False,
+                weights=('imagenet' if use_imagenet else None),
+                input_tensor=x_prep,
+                pooling=None
+            )
+            # conv4 마지막 블록 출력 (이 레이어명은 torchvision/keras 표준)
+            feat = base.get_layer('conv4_block6_out').output  # [B, H, W, 1024]
+
+            # 3x3 stride=2로 64채널 축소 (이 이름은 ckpt 호환의 기준이 됨)
+            reduce = tf.keras.layers.Conv2D(
+                64, kernel_size=3, strides=2, padding='same',
+                use_bias=True, name=scope_name + '_reduce')(feat)
+
+            # keep_prob(=TF1) 기준 dropout (trainable일 때만 작동)
+            if trainable:
+                # tf.nn.dropout은 keep_prob 사용
+                reduce = tf.nn.dropout(reduce, keep_prob=keep_prob, name=scope_name + '_drop')
+            return reduce
+
+    # ---------------- 백본 추출 ----------------
+    grd_feat = resnet_feature(x_grd, 'ResNet_grd')  # [B, Hg, Wg, 64]
+    sat_feat = resnet_feature(x_sat, 'ResNet_sat')  # [B, Hs, Ws, 64]
+
+    # ---------------- 해상도 정합 ----------------
+    h, w, _ = sat_feat.get_shape().as_list()[1:]
+    grd_feat = tf.image.resize_bilinear(grd_feat, [h, w])
+
+    # ---------------- OT 모듈 (grd만) ----------------
+    def conv1x1_to1(x, name, activated=True):
+        # 1x1 conv → 1ch
+        with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+            in_ch = x.get_shape().as_list()[-1]
+            w = tf.get_variable('weights', shape=[1, 1, in_ch, 1],
+                                initializer=tf.keras.initializers.glorot_uniform(),
+                                trainable=trainable)
+            b = tf.get_variable('biases', shape=[1],
+                                initializer=tf.zeros_initializer(),
+                                trainable=trainable)
+            y = tf.nn.conv2d(x, w, strides=[1,1,1,1], padding='SAME') + b
+            if activated:
+                y = tf.nn.relu(y)
+            return y
+
+    def ot_fc(x, name):
+        # x: [B, H, W, 1] → [B, N, N] (N=H*W)
+        with tf.variable_scope(name):
+            h, w, c = x.get_shape().as_list()[1:]
+            assert c == 1
+            N = h * w
+            inp = tf.reshape(x, [-1, N])  # [B, N]
+
+            # 원 코드 초기화/정규화 최대한 유지
+            w_init = tf.truncated_normal_initializer(mean=0.0, stddev=0.005)
+            # (주의) AdamW(decoupled)로 이동했으면 여기 정규화는 빼는 게 깔끔하지만
+            # 원 재현을 위해 일단 L2를 둘 수도 있음. 필요시 주석 처리.
+            # reg = tf.keras.regularizers.l2(0.0)
+            W = tf.get_variable('weights', shape=[N, N*N],
+                                initializer=w_init, trainable=trainable)  # , regularizer=reg
+            b = tf.get_variable('biases', shape=[N*N],
+                                initializer=tf.zeros_initializer(), trainable=trainable)
+            out = tf.matmul(inp, W) + b
+            out = tf.reshape(out, [-1, N, N])
+            return out
+
+    # grd branch: 1x1 conv → fc → sinkhorn → apply
+    grd_score = conv1x1_to1(grd_feat, name='ot_grd_branch/ot_conv', activated=True)
+    grd_fc    = ot_fc(grd_score, name='ot_grd_branch/ot_fc')
+    ot_mat    = sinkhorn(grd_fc * (-100.0))  # 원 코드 스케일 유지
+
+    # OT 적용
+    def apply_ot(x, T):
+        h_, w_, c_ = x.get_shape().as_list()[1:]
+        N = T.get_shape().as_list()[1]
+        # [B,H,W,C] → [B,N,C] → [B,C,N]
+        x_resh = tf.reshape(x, [-1, h_*w_, c_])
+        x_resh = tf.transpose(x_resh, [0, 2, 1])       # [B,C,N]
+        out = tf.einsum('bci, bio -> bco', x_resh, T)  # [B,C,N]
+        out = tf.transpose(out, [0, 2, 1])             # [B,N,C]
+        out = tf.reshape(out, [-1, h_, w_, c_])        # [B,H,W,C]
+        return out
+
+    grd_ot = apply_ot(grd_feat, ot_mat)
+    sat_ot = sat_feat  # sat은 그대로 (원 코드 동일)
+
+    # ---------------- Flatten + L2 normalize ----------------
+    def flatten_l2(feat):
+        shp = feat.get_shape().as_list()[1:]
+        vec = tf.reshape(feat, [-1, shp[0]*shp[1]*shp[2]])
+        return tf.nn.l2_normalize(vec, axis=1)
+
+    sat_global = flatten_l2(sat_ot)
+    grd_global = flatten_l2(grd_ot)
+    return sat_global, grd_global

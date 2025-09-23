@@ -153,7 +153,7 @@ def train(start_epoch=0):
     sat_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
     grd_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
 
-    loss = compute_loss(sat_global, grd_global, batch_hard_count=5)
+    loss = compute_loss(sat_global, grd_global, batch_hard_count=0)
 
     # set training
     global_step = tf.Variable(0, trainable=False)
@@ -180,7 +180,10 @@ def train(start_epoch=0):
         print('load model...')
 
         if start_epoch == 0:
-            load_model_path = '../Model/Initial_model/Initial_model.ckpt'
+            if network_type == 'ResNet_conv':
+                load_model_path = '../Model/Initial_model_resnet/Initial_model.ckpt'  # ← 새로 만든 ckpt
+            else:
+                load_model_path = '../Model/Initial_model/Initial_model.ckpt'
             saver.restore(sess, load_model_path)
         else:
 

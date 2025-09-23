@@ -54,6 +54,7 @@ def validate(grd_descriptor, sat_descriptor):
 
 
 def compute_loss(sat_global, grd_global, utms_x, UTMthres, batch_hard_count=0):
+    print(batch_hard_count)
 
     with tf.name_scope('weighted_soft_margin_triplet_loss'):
 
@@ -116,7 +117,7 @@ def train(start_epoch=0):
     sat_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
     grd_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
 
-    loss = compute_loss(sat_global, grd_global, utms_x, input_data.posDistSqThr)
+    loss = compute_loss(sat_global, grd_global, utms_x, input_data.posDistSqThr, 5)
 
 
     # set training

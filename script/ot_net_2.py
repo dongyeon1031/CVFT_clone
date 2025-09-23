@@ -84,7 +84,7 @@ def CVFT(x_sat, x_grd, keep_prob, trainable):
                 shape=[in_dimension, out_dimension],
                 trainable=trainable,
                 initializer=w_init,
-                regularizer=None
+                regularizer=l2_reg
             )
 
             # bias 초기화: 기존 코드는 모양이 안 맞을 가능성 큼(eye→flatten 후 길이 in_dimension**2), bih

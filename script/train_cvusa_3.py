@@ -135,33 +135,7 @@ def train(start_epoch=0):
     sat_x = tf.placeholder(tf.float32, [None, 256, 256, 3], name='sat_x')
 
     keep_prob = tf.placeholder(tf.float32)
-    # learning_rate = tf.placeholder(tf.float32)
-
-    # 1) step 계산
-    train_size = input_data.get_dataset_size()
-    steps_per_epoch = int(np.ceil(train_size / float(batch_size)))
-    total_steps = number_of_epoch * steps_per_epoch
-    warmup_steps = max(1, int(0.05 * total_steps))  # 총 step의 5% 워밍업 (원하면 3~10%)
-
-    # 베이스/최저 학습률 (필요시 조정)
-    base_lr = 1e-4   # 권장: 1e-4부터 시작
-    min_lr  = base_lr * 0.1
-
-    # 2) 글로벌 스텝 (★중복 정의 금지!)
-    global_step = tf.Variable(0, trainable=False)
-
-    # 3) 선형 워밍업 + 코사인 디케이
-    def linear_warmup_cosine_lr(step, warmup, total, base, minv):
-        step   = tf.cast(step, tf.float32)
-        warmup = tf.cast(warmup, tf.float32)
-        total  = tf.cast(total, tf.float32)
-
-        lr_warm = base * (step / tf.maximum(1.0, warmup))
-        progress = tf.clip_by_value((step - warmup) / tf.maximum(1.0, (total - warmup)), 0.0, 1.0)
-        lr_cos = minv + 0.5 * (base - minv) * (1.0 + tf.cos(np.pi * progress))
-        return tf.where(step < warmup, lr_warm, lr_cos)
-
-    learning_rate = linear_warmup_cosine_lr(global_step, warmup_steps, total_steps, base_lr, min_lr)
+    learning_rate = tf.placeholder(tf.float32)
 
     # build model
     if network_type == 'CVFT':
@@ -182,7 +156,9 @@ def train(start_epoch=0):
     loss = compute_loss(sat_global, grd_global, batch_hard_count=5)
 
     # set training
-    # global_step = tf.Variable(0, trainable=False)
+    global_step = tf.Variable(0, trainable=False)
+    # with tf.name_scope('train'):
+            # train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
     with tf.device('/gpu:1'):
         with tf.name_scope('train'):
             train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
@@ -204,7 +180,11 @@ def train(start_epoch=0):
         print('load model...')
 
         if start_epoch == 0:
-            load_model_path = '../Model/Initial_model/Initial_model.ckpt'
+            if network_type == 'ResNet_conv':
+                print("enter")
+                load_model_path = '../Model/Initial_model_resnet/Initial_model.ckpt'  # ← 새로 만든 ckpt
+            else:
+                load_model_path = '../Model/Initial_model/Initial_model.ckpt'
             saver.restore(sess, load_model_path)
         else:
 
@@ -227,14 +207,12 @@ def train(start_epoch=0):
 
                 global_step_val = tf.train.global_step(sess, global_step)
 
-                feed_dict = {sat_x: batch_sat, grd_x: batch_grd, keep_prob: keep_prob_val}
+                feed_dict = {sat_x: batch_sat, grd_x: batch_grd,
+                             learning_rate: learning_rate_val, keep_prob: keep_prob_val}
                 if iter % 20 == 0:
-                        _, loss_val, lr_now, gs = sess.run(
-                            [train_step, loss, learning_rate, global_step],
-                            feed_dict=feed_dict
-                        )
-                        print('global %d, epoch %d, iter %d: loss %.4f, lr %.6e' %
-                            (gs, epoch, iter, loss_val, lr_now))
+                    _, loss_val = sess.run([train_step, loss], feed_dict=feed_dict)
+                    print('global %d, epoch %d, iter %d: loss : %.4f ' %
+                          (global_step_val, epoch, iter, loss_val))
                 else:
                     sess.run(train_step, feed_dict=feed_dict)
 
@@ -271,7 +249,7 @@ def train(start_epoch=0):
             val_recall1, val_recall1percent = validate(grd_global_descriptor, sat_global_descriptor)
             print('   %d: Recall@1 = %.1f%%, Recall@1%% = %.1f%%' %
                 (epoch, val_recall1 * 100.0, val_recall1percent * 100.0))
-            with open('../Result/' + data_type + '/' + str(network_type) + '_accuracy_2.txt', 'a') as file:
+            with open('../Result/' + data_type + '/' + str(network_type) + '_accuracy_resnet.txt', 'a') as file:
                 file.write(str(epoch) + ' ' + str(iter) + 
                         ' : Recall@1 = ' + str(val_recall1) + 
                         ' Recall@1% = ' + str(val_recall1percent) + '\n')
