@@ -1,6 +1,6 @@
 # from cvm_net import *
 # from input_data import InputData
-from ot_net import *
+from ot_net_2 import *
 from input_data_cvusa import InputData
 
 # import tensorflow as tf
@@ -10,7 +10,7 @@ import numpy as np
 import os
 #
 # os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import argparse
 
@@ -159,9 +159,31 @@ def train(start_epoch=0):
     global_step = tf.Variable(0, trainable=False)
     # with tf.name_scope('train'):
             # train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
-    with tf.device('/gpu:0'):
+    with tf.device('/gpu:1'):
         with tf.name_scope('train'):
-            train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
+            weight_decay = 1e-4
+
+            optim = tf.train.AdamOptimizer(learning_rate)  # ← 기존처럼 placeholder나 스케줄러 텐서 사용 가능
+
+            # 1) 그래디언트 계산 및 적용
+            grads_and_vars = optim.compute_gradients(loss)
+            apply_grads_op = optim.apply_gradients(grads_and_vars, global_step=global_step)
+
+            # 2) 디커플드 weight-decay (bias/BN 제외)
+            #    이름으로 필터링: 'bias', 'beta', 'gamma', 'moving_mean', 'moving_variance' 등 제외
+            decay_vars = []
+            for v in tf.trainable_variables():
+                name = v.name.lower()
+                if ('bias' in name) or ('beta' in name) or ('gamma' in name) \
+                or ('moving_mean' in name) or ('moving_variance' in name):
+                    continue
+                decay_vars.append(v)
+
+            # 학습률 텐서가 placeholder라면 그걸 그대로 사용 (스케줄러여도 동일)
+            decay_ops = [v.assign_sub(learning_rate * weight_decay * v) for v in decay_vars]
+
+            # 3) 하나의 train_step으로 묶기
+            train_step = tf.group(apply_grads_op, *decay_ops)
 
     print('setting saver...')
     saver = tf.train.Saver(tf.global_variables(), max_to_keep=None)
@@ -209,12 +231,16 @@ def train(start_epoch=0):
                     _, loss_val = sess.run([train_step, loss], feed_dict=feed_dict)
                     print('global %d, epoch %d, iter %d: loss : %.4f ' %
                           (global_step_val, epoch, iter, loss_val))
+                if iter % 100 == 0:
+                    some_w = decay_vars[0]
+                    w_norm = sess.run(tf.norm(some_w))
+                    print("||W||:", w_norm) 
                 else:
                     sess.run(train_step, feed_dict=feed_dict)
 
                 iter += 1
 
-            model_dir = '../Model/' + data_type + '/' + network_type + '/' + str(epoch) + '/'
+            model_dir = '../Model/' + data_type + '/' + network_type + '/' + str(epoch) + '_2/'
 
             if not os.path.exists(model_dir):
                 os.makedirs(model_dir)
@@ -245,7 +271,7 @@ def train(start_epoch=0):
             val_recall1, val_recall1percent = validate(grd_global_descriptor, sat_global_descriptor)
             print('   %d: Recall@1 = %.1f%%, Recall@1%% = %.1f%%' %
                 (epoch, val_recall1 * 100.0, val_recall1percent * 100.0))
-            with open('../Result/' + data_type + '/' + str(network_type) + '_accuracy.txt', 'a') as file:
+            with open('../Result/' + data_type + '/' + str(network_type) + '_accuracy_2.txt', 'a') as file:
                 file.write(str(epoch) + ' ' + str(iter) + 
                         ' : Recall@1 = ' + str(val_recall1) + 
                         ' Recall@1% = ' + str(val_recall1percent) + '\n')
