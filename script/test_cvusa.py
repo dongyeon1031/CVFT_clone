@@ -18,7 +18,7 @@ import os
 import matplotlib.pyplot as plt
 
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import argparse
 
@@ -38,6 +38,51 @@ batch_size = 32
 # -------------------------------------------------------- #
 
 # --------------------- Retrieval Visualization ---------------------
+# ===== t-SNE 시각화 & 임베딩 저장 =====
+def save_tsne_plot(sat_feat, grd_feat, out_path="./tsne_embeddings.png",
+                   max_points=5000, seed=42, normalize=True):
+    """
+    sat_feat, grd_feat: np.ndarray [N, D] 형태의 위성/지상 임베딩, huh
+    normalize=True면 L2 정규화 후 투영, what
+    """
+    import numpy as np
+    try:
+        from sklearn.manifold import TSNE
+    except ImportError:
+        print("[WARN] scikit-learn이 없어 t-SNE를 건너뜀: pip install scikit-learn", flush=True)
+        return
+
+    S = sat_feat.copy()
+    G = grd_feat.copy()
+    if normalize:
+        S = S / (np.linalg.norm(S, axis=1, keepdims=True) + 1e-12)
+        G = G / (np.linalg.norm(G, axis=1, keepdims=True) + 1e-12)
+
+    # 샘플링
+    rng = np.random.RandomState(seed)
+    ns = min(len(S), max_points // 2)
+    ng = min(len(G), max_points - ns)
+    idx_s = rng.choice(len(S), size=ns, replace=False)
+    idx_g = rng.choice(len(G), size=ng, replace=False)
+
+    X = np.vstack([G[idx_g], S[idx_s]])
+    Y = np.array([0]*ng + [1]*ns)  # 0=query(grd), 1=reference(sat)
+
+    # t-SNE
+    tsne = TSNE(n_components=2, perplexity=30, learning_rate="auto", init="pca", random_state=seed)
+    X2 = tsne.fit_transform(X)
+
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(7,6))
+    plt.scatter(X2[Y==0,0], X2[Y==0,1], s=6, alpha=0.6, label="Query (grd)")
+    plt.scatter(X2[Y==1,0], X2[Y==1,1], s=6, alpha=0.6, label="Reference (sat)")
+    plt.legend()
+    plt.title("t-SNE of Embeddings (sampled)")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=220)
+    plt.close()
+    print(f"[INFO] Saved t-SNE plot to {out_path}", flush=True)
+
 def _resolve_paths(row, img_root="../Data/CVUSA"):
     """
     row: list/tuple 또는 문자열.
@@ -253,8 +298,8 @@ if __name__ == '__main__':
         sess.run(tf.global_variables_initializer())
 
         print('load model...')
-        load_model_path = '../Model/trained_model/CVUSA/CVFT/model.ckpt'
-        # load_model_path = '../Model/CVUSA/CVFT/_21/model.ckpt'
+        # load_model_path = '../Model/trained_model/CVUSA/CVFT/model.ckpt'
+        load_model_path = "../Model/CVUSA/CVFT/base/40/model.ckpt"
         saver.restore(sess, load_model_path)
 
 
@@ -297,3 +342,34 @@ if __name__ == '__main__':
         print(f'eval soft-margin triplet loss: {eval_loss:.6f}')
 
         visualize_random_retrieval(dist_array, input_data, top_k=5, num_queries=5, seed=2024)
+        # 임베딩 npy 저장 & t-SNE 호출
+        np.save("./grd_feats.npy", grd_global_descriptor)
+        np.save("./sat_feats.npy", sat_global_descriptor)
+        save_tsne_plot(sat_global_descriptor, grd_global_descriptor,
+                    out_path="./tsne_embeddings.png",
+                    max_points=5000, seed=2025, normalize=True)
+        # =====================================
+
+        # ---------- Top-1 cosine similarity histogram ----------
+        # (1) 코사인 유사도 행렬 S = sat_norm @ grd_norm^T
+        sat_norm = sat_global_descriptor / (np.linalg.norm(sat_global_descriptor, axis=1, keepdims=True) + 1e-12)
+        grd_norm = grd_global_descriptor / (np.linalg.norm(grd_global_descriptor, axis=1, keepdims=True) + 1e-12)
+        S = np.matmul(sat_norm, grd_norm.T)  # shape [N_sat, N_grd]
+
+        # (2) 각 쿼리(grd, 열)마다 Top-1 위성 인덱스와 점수
+        best_i = np.argmax(S, axis=0)  # length N_grd
+        top1_scores = S[best_i, np.arange(S.shape[1])]  # length N_grd
+        correct_mask = (best_i == np.arange(S.shape[1]))  # GT는 대각선(i==j)
+
+        # (3) 히스토그램 저장
+        plt.figure(figsize=(8,6))
+        plt.hist(top1_scores[correct_mask], bins=50, alpha=0.85, label="Top1 Correct")
+        plt.hist(top1_scores[~correct_mask], bins=50, alpha=0.85, label="Top1 Incorrect")
+        plt.title("Top-1 Similarity Distribution")
+        plt.xlabel("cosine similarity")
+        plt.ylabel("count")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig("./top1_similarity_hist.png", dpi=220)
+        plt.close()
+        print("[INFO] Saved ./top1_similarity_hist.png")

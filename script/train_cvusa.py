@@ -44,9 +44,8 @@ loss_type = 'l1'
 batch_size = 32
 is_training = True
 loss_weight = 10.0
-number_of_epoch = 50
+number_of_epoch = 10
 
-learning_rate_val = 1e-5
 keep_prob_val = 0.8
 # -------------------------------------------------------- #
 
@@ -264,7 +263,7 @@ def train(start_epoch=0):
     with tf.device('/gpu:0'):
         with tf.name_scope('train'):
             # train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
-                    # Adam core (일반 Adam 업데이트)
+            # Adam core (일반 Adam 업데이트)
             opt = tf.train.AdamOptimizer(learning_rate, beta1=0.9, beta2=0.999, epsilon=1e-8)
 
             grads_vars = opt.compute_gradients(loss)
