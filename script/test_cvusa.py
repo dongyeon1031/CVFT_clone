@@ -15,8 +15,10 @@ tf.disable_v2_behavior()
 import numpy as np
 import os
 
+import matplotlib.pyplot as plt
+
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import argparse
 
@@ -35,7 +37,167 @@ batch_size = 32
 
 # -------------------------------------------------------- #
 
+# --------------------- Retrieval Visualization ---------------------
+def _resolve_paths(row, img_root="../Data/CVUSA"):
+    """
+    row: list/tuple 또는 문자열.
+      - 보통 ['bingmap/19/xxx.jpg','streetview/panos/xxx.jpg','xxx'] (3칸)
+      - 드물게 2칸일 수도 있음.
+    return: (street_abs_path, bing_abs_path, sample_id or None)
+    """
+    # row가 문자열로 올 경우(혹시모를 케이스) 콤마 기준 분리 시도
+    if isinstance(row, str):
+        parts = [p.strip() for p in row.split(',') if p.strip()]
+    elif isinstance(row, (list, tuple)):
+        parts = list(row)
+    else:
+        raise ValueError(f"Unexpected row type: {type(row)}")
 
+    if len(parts) < 2:
+        raise ValueError(f"Row has <2 fields: {parts}")
+
+    # 표준: 0=bing, 1=street, 2=id(옵션)
+    bing_rel   = parts[0]
+    street_rel = parts[1]
+    sample_id  = parts[2] if len(parts) > 2 else None
+
+    # 절대 경로로 변환
+    bing_abs   = os.path.join(img_root, bing_rel)
+    street_abs = os.path.join(img_root, street_rel)
+    return street_abs, bing_abs, sample_id
+
+def _topk_for_query(dist_array, q_idx, k=5):
+    """열 기준(ground q_idx)로 거리가 작은 순서 top-k 위성 인덱스 반환"""
+    column = dist_array[:, q_idx]  # shape [N]
+    order = np.argsort(column)     # 작은 거리(유사) 우선
+    return order[:k].tolist()
+
+def _draw_border(ax, color="g", linewidth=4):
+    """축에 컬러 테두리 그리기"""
+    for spine in ax.spines.values():
+        spine.set_edgecolor(color)
+        spine.set_linewidth(linewidth)
+
+def visualize_random_retrieval(dist_array, input_data, top_k=5, num_queries=5, seed=2024,
+                               fixed_indices=None, img_root="../Data/CVUSA"):
+    """
+    dist_array: [N, N] (sat vs grd) ; (i,i)가 GT
+    input_data: InputData 인스턴스 (get_test_list 사용)
+    top_k: 각 쿼리에 대해 보여줄 위성 이미지 개수
+    num_queries: 시각화할 쿼리 개수
+    seed: 랜덤 시드 (fixed_indices 없을 때 사용)
+    fixed_indices: 특정 쿼리 인덱스 리스트(옵션)
+    img_root: 이미지 루트 디렉토리 (예: ../Data/CVUSA)
+    """
+    # 1) 테스트 리스트 확보
+    test_list = input_data.get_test_list()
+    N = len(test_list)
+    if N == 0:
+        print("[WARN] test_list is empty.")
+        return
+
+    # 2) 쿼리 인덱스 선택
+    if fixed_indices is not None and len(fixed_indices) > 0:
+        query_indices = [i for i in fixed_indices if 0 <= i < N][:num_queries]
+    else:
+        rng = np.random.RandomState(seed)
+        query_indices = rng.choice(N, size=min(num_queries, N), replace=False).tolist()
+
+    # 3) 각 쿼리에 대해 시각화
+    for qi in query_indices:
+        row = test_list[qi]
+        # 쿼리용 경로(Streetview), GT 위성 경로
+        try:
+            q_street_path, _, qi_id = _resolve_paths(test_list[qi], img_root)
+        except Exception as e:
+            print(f"[WARN] resolve_paths failed for query index {qi}: {e}")
+            continue
+
+        # top-k 후보 인덱스
+        top_idxs = _topk_for_query(dist_array, qi, k=top_k)
+
+        # 4) 그림 그리드: 1행(쿼리 2장: street(좌), GT bing(우)), 2행(top-k bing)
+        fig = plt.figure(figsize=(2*(top_k+1), 6))
+        fig.suptitle(f"Query #{qi_id} — top-{top_k} retrieval", fontsize=14)
+
+        # (1) 1행 왼쪽: 쿼리 Streetview
+        ax_q = plt.subplot(2, top_k+1, 1)  # 2행, (top_k+1)열 그리드 중 첫 칸
+        try:
+            img_q = plt.imread(q_street_path)
+            ax_q.imshow(img_q)
+            ax_q.set_title("Query (Streetview)")
+        except Exception as e:
+            ax_q.text(0.5, 0.5, f"Load fail:\n{os.path.basename(q_street_path)}",
+                      ha='center', va='center')
+            print(f"[WARN] 쿼리 이미지 로드 실패: {q_street_path} ({e})")
+        ax_q.axis("off")
+        _draw_border(ax_q, color="g", linewidth=4)  # 쿼리 자체는 녹색 테두리
+
+        # (2) 1행 오른쪽: 정답 GT Bing (시각적으로 비교용)
+        ax_gt = plt.subplot(2, top_k+1, top_k+1)  # 1행의 마지막 칸
+        try:
+            _, gt_bing, _ = _resolve_paths(test_list[qi], img_root)
+            img_gt = plt.imread(gt_bing)
+            ax_gt.imshow(img_gt)
+            ax_gt.set_title("GT (Bing)")
+        except Exception as e:
+            ax_gt.text(0.5, 0.5, f"Load fail:\n{os.path.basename(gt_bing)}",
+                       ha='center', va='center')
+            print(f"[WARN] GT 이미지 로드 실패: {gt_bing} ({e})")
+        ax_gt.axis("off")
+        _draw_border(ax_gt, color="g", linewidth=4)  # GT는 녹색 테두리
+
+        # (3) 2행: top-k Retrieval 결과 (Bing)
+        for rank, si in enumerate(top_idxs, start=1):
+            ax = plt.subplot(2, top_k+1, (top_k+1) + rank)  # 2행에서 rank 위치
+            try:
+                _, cand_bing, si_id = _resolve_paths(test_list[si], img_root)
+                img_cand = plt.imread(cand_bing)
+                ax.imshow(img_cand)
+                is_correct = (si == qi)
+                ax.set_title(f"#{rank} idx={si_id}",
+                     color=("g" if is_correct else "r"))  # 제목 색상도 맞춤
+                _draw_border(ax, color=("g" if is_correct else "r"), linewidth=4)
+            except Exception as e:
+                ax.text(0.5, 0.5, f"Load fail:\nidx={si}",
+                        ha='center', va='center')
+                print(f"[WARN] 후보 이미지 로드 실패: {cand_bing} ({e})")
+                _draw_border(ax, color="r", linewidth=4)
+            ax.axis("off")
+
+        plt.tight_layout()
+
+        # 저장 (원하면 경로 바꾸기)
+        save_path = f"../Visualization/query{qi}.png"
+        plt.savefig(save_path, dpi=200)
+        print(f"[INFO] Saved visualization to {save_path}") 
+# -------------------------------------------------------------------
+
+def eval_soft_margin_triplet_loss(dist_array, loss_weight=10.0, batch_hard_k=0):
+    """
+    dist_array: [N, N], (i,i)가 정답쌍 거리. 작을수록 유사.
+    훈련 코드의 compute_loss와 동일한 형태로 평가용 loss를 계산.
+    """
+    # sat x grd 기준
+    pos = np.diag(dist_array)                          # [N]
+    # g2s
+    trip_g2s = pos[None, :] - dist_array              # [N, N]
+    loss_g2s = np.log1p(np.exp(trip_g2s * loss_weight))
+    # s2g
+    trip_s2g = pos[:, None] - dist_array              # [N, N]
+    loss_s2g = np.log1p(np.exp(trip_s2g * loss_weight))
+
+    if batch_hard_k and batch_hard_k > 0:
+        # in-batch hard mining 흉내 (평가에도 참고용으로만)
+        topk_g2s = np.partition(loss_g2s.T, -batch_hard_k, axis=0)[-batch_hard_k:, :].mean()
+        topk_s2g = np.partition(loss_s2g, -batch_hard_k, axis=1)[:, -batch_hard_k:].mean()
+        return 0.5 * (topk_g2s + topk_s2g)
+    else:
+        N = dist_array.shape[0]
+        pair_n = N * (N - 1.0)
+        loss_g2s = (loss_g2s.sum() - np.log1p(np.exp(0)).sum()) / pair_n  # 대각 포함 보정은 생략 가능
+        loss_s2g = (loss_s2g.sum() - np.log1p(np.exp(0)).sum()) / pair_n
+        return 0.5 * (loss_g2s + loss_s2g)
 
 def validate(dist_array, top_k):
     accuracy = 0.0
@@ -91,8 +253,8 @@ if __name__ == '__main__':
         sess.run(tf.global_variables_initializer())
 
         print('load model...')
-        # load_model_path = '../Model/trained_model/CVUSA/CVFT/model.ckpt'
-        load_model_path = '../Model/CVUSA/CVFT/9/model.ckpt'
+        load_model_path = '../Model/trained_model/CVUSA/CVFT/model.ckpt'
+        # load_model_path = '../Model/CVUSA/CVFT/_21/model.ckpt'
         saver.restore(sess, load_model_path)
 
 
@@ -131,3 +293,7 @@ if __name__ == '__main__':
         print('top5', ':', val_accuracy[0,5])
         print('top10', ':', val_accuracy[0,10])
         print('top1%', ':', val_accuracy[0,-1])
+        eval_loss = eval_soft_margin_triplet_loss(dist_array, loss_weight=10.0, batch_hard_k=0)
+        print(f'eval soft-margin triplet loss: {eval_loss:.6f}')
+
+        visualize_random_retrieval(dist_array, input_data, top_k=5, num_queries=5, seed=2024)

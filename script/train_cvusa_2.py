@@ -12,6 +12,12 @@ import os
 # os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
+# --------------  시드 고정  -------------- #
+# 넘파이
+np.random.seed(2025)
+# 텐서플로
+tf.set_random_seed(2025)
+
 import argparse
 
 parser = argparse.ArgumentParser(description='TensorFlow implementation.')
@@ -38,7 +44,7 @@ loss_type = 'l1'
 batch_size = 32
 is_training = True
 loss_weight = 10.0
-number_of_epoch = 30
+number_of_epoch = 10
 
 learning_rate_val = 1e-5
 keep_prob_val = 0.8
@@ -119,6 +125,78 @@ def compute_loss(sat_global, grd_global, batch_hard_count=0):
 
     return loss
 
+def nt_xent_loss(sat_global, grd_global, temperature=0.07):
+    """
+    Symmetric NT-Xent (InfoNCE) loss for cross-view matching.
+    sat_global: [B, D], grd_global: [B, D]
+    """
+    with tf.name_scope('nt_xent_loss'):
+        # 1) L2 정규화 (코사인 유사도 기반) 
+        sat = tf.nn.l2_normalize(sat_global, axis=1)
+        grd = tf.nn.l2_normalize(grd_global, axis=1)
+
+        # 2) 유사도 로짓 계산: [B, B]
+        logits = tf.matmul(sat, grd, transpose_b=True) / temperature  # s2g
+
+        # 3) 정답 인덱스(대각선이 positive)
+        labels = tf.range(tf.shape(logits)[0])
+
+        # 4) 대칭 손실: sat->grd, grd->sat
+        loss_s2g = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits)
+        )
+        loss_g2s = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=tf.transpose(logits))
+        )
+
+        loss = 0.5 * (loss_s2g + loss_g2s)
+    return loss
+
+def circle_loss(sat_global, grd_global, m=0.25, gamma=80.0, symmetric=True):
+    """
+    Symmetric Circle Loss for cross-view matching (TF1).
+    sat_global: [B, D], grd_global: [B, D]
+    m: margin (typ. 0.25), gamma: scale (typ. 40~80)
+    """
+    with tf.name_scope('circle_loss'):
+        # 1) Cosine 기반을 위해 L2 정규화
+        sat = tf.nn.l2_normalize(sat_global, axis=1)
+        grd = tf.nn.l2_normalize(grd_global, axis=1)
+
+        def direction_loss(a, b):
+            # a->b 방향 손실 계산 (배치 내 대칭은 밖에서 처리)
+            sim = tf.matmul(a, b, transpose_b=True)                      # [B, B]
+            B = tf.shape(sim)[0]
+            eye = tf.eye(B)
+            neg_mask = 1.0 - eye                                        # off-diagonal만 1
+
+            # Positive (대각선)
+            pos = tf.linalg.tensor_diag_part(sim)                        # [B]
+            alpha_p = tf.stop_gradient(tf.maximum(0.0, 1.0 + m - pos))   # [B]
+            delta_p = 1.0 - m
+            pos_term = -gamma * alpha_p * (pos - delta_p)               # [B]
+
+            # Negative (오프대각선)
+            alpha_n = tf.stop_gradient(tf.maximum(0.0, sim + m))        # [B, B]
+            delta_n = m
+            neg_terms = gamma * alpha_n * (sim - delta_n)               # [B, B]
+
+            # 대각선은 제외(-inf)해서 logsumexp에 안 들어가게 처리
+            VERY_NEG = tf.constant(-1e9, dtype=neg_terms.dtype)
+            neg_terms = neg_terms + (1.0 - neg_mask) * VERY_NEG
+
+            # per-anchor: log(1 + exp(pos_term) * sum_j exp(neg_term_ij))
+            logsum_neg = tf.reduce_logsumexp(neg_terms, axis=1)          # [B]
+            loss_vec = tf.nn.softplus(pos_term + logsum_neg)             # [B]
+            return tf.reduce_mean(loss_vec)                               # scalar
+
+        loss_s2g = direction_loss(sat, grd)
+        if symmetric:
+            loss_g2s = direction_loss(grd, sat)
+            loss = 0.5 * (loss_s2g + loss_g2s)
+        else:
+            loss = loss_s2g
+        return loss
 
 def train(start_epoch=0):
     '''
@@ -170,8 +248,6 @@ def train(start_epoch=0):
         sat_global, grd_global = VGG_conv(sat_x, grd_x, keep_prob, is_training)
     elif network_type == 'VGG_gp':
         sat_global, grd_global = VGG_gp(sat_x, grd_x, keep_prob, is_training)
-    elif network_type == 'ResNet_conv':  # ⬅️ 추가
-        sat_global, grd_global = CVFT_ResNet(sat_x, grd_x, keep_prob, is_training)
     else:
         raise ValueError('unknown network_type')
 
@@ -179,7 +255,9 @@ def train(start_epoch=0):
     sat_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
     grd_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
 
-    loss = compute_loss(sat_global, grd_global, batch_hard_count=5)
+    # loss = compute_loss(sat_global, grd_global, batch_hard_count=5)
+    # loss = nt_xent_loss(sat_global, grd_global, temperature=0.08)
+    loss = circle_loss(sat_global, grd_global, gamma=60.0)
 
     # set training
     # global_step = tf.Variable(0, trainable=False)

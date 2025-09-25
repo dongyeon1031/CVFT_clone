@@ -12,6 +12,12 @@ import os
 # os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
+# --------------  시드 고정  -------------- #
+# 넘파이
+np.random.seed(2025)
+# 텐서플로
+tf.set_random_seed(2025)
+
 import argparse
 
 parser = argparse.ArgumentParser(description='TensorFlow implementation.')
@@ -38,7 +44,7 @@ loss_type = 'l1'
 batch_size = 32
 is_training = True
 loss_weight = 10.0
-number_of_epoch = 30
+number_of_epoch = 50
 
 learning_rate_val = 1e-5
 keep_prob_val = 0.8
@@ -119,6 +125,78 @@ def compute_loss(sat_global, grd_global, batch_hard_count=0):
 
     return loss
 
+def nt_xent_loss(sat_global, grd_global, temperature=0.07):
+    """
+    Symmetric NT-Xent (InfoNCE) loss for cross-view matching.
+    sat_global: [B, D], grd_global: [B, D]
+    """
+    with tf.name_scope('nt_xent_loss'):
+        # 1) L2 정규화 (코사인 유사도 기반) 
+        sat = tf.nn.l2_normalize(sat_global, axis=1)
+        grd = tf.nn.l2_normalize(grd_global, axis=1)
+
+        # 2) 유사도 로짓 계산: [B, B]
+        logits = tf.matmul(sat, grd, transpose_b=True) / temperature  # s2g
+
+        # 3) 정답 인덱스(대각선이 positive)
+        labels = tf.range(tf.shape(logits)[0])
+
+        # 4) 대칭 손실: sat->grd, grd->sat
+        loss_s2g = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits)
+        )
+        loss_g2s = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=tf.transpose(logits))
+        )
+
+        loss = 0.5 * (loss_s2g + loss_g2s)
+    return loss
+
+def circle_loss(sat_global, grd_global, m=0.25, gamma=80.0, symmetric=True):
+    """
+    Symmetric Circle Loss for cross-view matching (TF1).
+    sat_global: [B, D], grd_global: [B, D]
+    m: margin (typ. 0.25), gamma: scale (typ. 40~80)
+    """
+    with tf.name_scope('circle_loss'):
+        # 1) Cosine 기반을 위해 L2 정규화
+        sat = tf.nn.l2_normalize(sat_global, axis=1)
+        grd = tf.nn.l2_normalize(grd_global, axis=1)
+
+        def direction_loss(a, b):
+            # a->b 방향 손실 계산 (배치 내 대칭은 밖에서 처리)
+            sim = tf.matmul(a, b, transpose_b=True)                      # [B, B]
+            B = tf.shape(sim)[0]
+            eye = tf.eye(B)
+            neg_mask = 1.0 - eye                                        # off-diagonal만 1
+
+            # Positive (대각선)
+            pos = tf.linalg.tensor_diag_part(sim)                        # [B]
+            alpha_p = tf.stop_gradient(tf.maximum(0.0, 1.0 + m - pos))   # [B]
+            delta_p = 1.0 - m
+            pos_term = -gamma * alpha_p * (pos - delta_p)               # [B]
+
+            # Negative (오프대각선)
+            alpha_n = tf.stop_gradient(tf.maximum(0.0, sim + m))        # [B, B]
+            delta_n = m
+            neg_terms = gamma * alpha_n * (sim - delta_n)               # [B, B]
+
+            # 대각선은 제외(-inf)해서 logsumexp에 안 들어가게 처리
+            VERY_NEG = tf.constant(-1e9, dtype=neg_terms.dtype)
+            neg_terms = neg_terms + (1.0 - neg_mask) * VERY_NEG
+
+            # per-anchor: log(1 + exp(pos_term) * sum_j exp(neg_term_ij))
+            logsum_neg = tf.reduce_logsumexp(neg_terms, axis=1)          # [B]
+            loss_vec = tf.nn.softplus(pos_term + logsum_neg)             # [B]
+            return tf.reduce_mean(loss_vec)                               # scalar
+
+        loss_s2g = direction_loss(sat, grd)
+        if symmetric:
+            loss_g2s = direction_loss(grd, sat)
+            loss = 0.5 * (loss_s2g + loss_g2s)
+        else:
+            loss = loss_s2g
+        return loss
 
 def train(start_epoch=0):
     '''
@@ -135,7 +213,33 @@ def train(start_epoch=0):
     sat_x = tf.placeholder(tf.float32, [None, 256, 256, 3], name='sat_x')
 
     keep_prob = tf.placeholder(tf.float32)
-    learning_rate = tf.placeholder(tf.float32)
+    # learning_rate = tf.placeholder(tf.float32)
+
+    # 1) step 계산
+    train_size = input_data.get_dataset_size()
+    steps_per_epoch = int(np.ceil(train_size / float(batch_size)))
+    total_steps = number_of_epoch * steps_per_epoch
+    warmup_steps = max(1, int(0.05 * total_steps))  # 총 step의 5% 워밍업 (원하면 3~10%)
+
+    # 베이스/최저 학습률 (필요시 조정)
+    base_lr = 1e-4
+    min_lr  = base_lr * 0.1
+
+    # 2) 글로벌 스텝 (★중복 정의 금지!)
+    global_step = tf.Variable(0, trainable=False)
+
+    # 3) 선형 워밍업 + 코사인 디케이
+    def linear_warmup_cosine_lr(step, warmup, total, base, minv):
+        step   = tf.cast(step, tf.float32)
+        warmup = tf.cast(warmup, tf.float32)
+        total  = tf.cast(total, tf.float32)
+
+        lr_warm = base * (step / tf.maximum(1.0, warmup))
+        progress = tf.clip_by_value((step - warmup) / tf.maximum(1.0, (total - warmup)), 0.0, 1.0)
+        lr_cos = minv + 0.5 * (base - minv) * (1.0 + tf.cos(np.pi * progress))
+        return tf.where(step < warmup, lr_warm, lr_cos)
+
+    learning_rate = linear_warmup_cosine_lr(global_step, warmup_steps, total_steps, base_lr, min_lr)
 
     # build model
     if network_type == 'CVFT':
@@ -144,8 +248,6 @@ def train(start_epoch=0):
         sat_global, grd_global = VGG_conv(sat_x, grd_x, keep_prob, is_training)
     elif network_type == 'VGG_gp':
         sat_global, grd_global = VGG_gp(sat_x, grd_x, keep_prob, is_training)
-    elif network_type == 'ResNet_conv':  # ⬅️ 추가
-        sat_global, grd_global = CVFT_ResNet(sat_x, grd_x, keep_prob, is_training)
     else:
         raise ValueError('unknown network_type')
 
@@ -153,15 +255,41 @@ def train(start_epoch=0):
     sat_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
     grd_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
 
-    loss = compute_loss(sat_global, grd_global, batch_hard_count=0)
+    loss = compute_loss(sat_global, grd_global, batch_hard_count=5)
+    # loss = nt_xent_loss(sat_global, grd_global, temperature=0.08)
+    # loss = circle_loss(sat_global, grd_global)
 
     # set training
-    global_step = tf.Variable(0, trainable=False)
-    # with tf.name_scope('train'):
-            # train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
+    # global_step = tf.Variable(0, trainable=False)
     with tf.device('/gpu:0'):
         with tf.name_scope('train'):
-            train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
+            # train_step = tf.train.AdamOptimizer(learning_rate, 0.9, 0.999).minimize(loss, global_step=global_step)
+                    # Adam core (일반 Adam 업데이트)
+            opt = tf.train.AdamOptimizer(learning_rate, beta1=0.9, beta2=0.999, epsilon=1e-8)
+
+            grads_vars = opt.compute_gradients(loss)
+
+            # (선택) 안정화: grad clipping
+            grads_vars = [(tf.clip_by_norm(g, 5.0), v) if g is not None else (g, v) for g, v in grads_vars]
+
+            train_core = opt.apply_gradients(grads_vars, global_step=global_step)
+
+            # AdamW: 디커플드 weight decay (bias/BN 제외)
+            weight_decay = 1e-4  # 3e-5 ~ 5e-4 범위 스윕 추천
+            def decay_filter(v):
+                n = v.name.lower()
+                # conv/fc 가중치 이름 패턴에 맞추고, bias/bn 파라미터는 제외
+                return (('weights' in n) or ('kernel' in n)) and not any(k in n for k in ['bias','beta','gamma','bn'])
+
+            with tf.control_dependencies([train_core]):
+                decay_ops = [
+                    tf.assign_sub(v, weight_decay * v)
+                    for g, v in grads_vars
+                    if (g is not None) and decay_filter(v)
+                ]
+                train_step = tf.group(*decay_ops)
+
+
 
     print('setting saver...')
     saver = tf.train.Saver(tf.global_variables(), max_to_keep=None)
@@ -180,10 +308,7 @@ def train(start_epoch=0):
         print('load model...')
 
         if start_epoch == 0:
-            if network_type == 'ResNet_conv':
-                load_model_path = '../Model/Initial_model_resnet/Initial_model.ckpt'  # ← 새로 만든 ckpt
-            else:
-                load_model_path = '../Model/Initial_model/Initial_model.ckpt'
+            load_model_path = '../Model/Initial_model/Initial_model.ckpt'
             saver.restore(sess, load_model_path)
         else:
 
@@ -206,12 +331,14 @@ def train(start_epoch=0):
 
                 global_step_val = tf.train.global_step(sess, global_step)
 
-                feed_dict = {sat_x: batch_sat, grd_x: batch_grd,
-                             learning_rate: learning_rate_val, keep_prob: keep_prob_val}
+                feed_dict = {sat_x: batch_sat, grd_x: batch_grd, keep_prob: keep_prob_val}
                 if iter % 20 == 0:
-                    _, loss_val = sess.run([train_step, loss], feed_dict=feed_dict)
-                    print('global %d, epoch %d, iter %d: loss : %.4f ' %
-                          (global_step_val, epoch, iter, loss_val))
+                        _, loss_val, lr_now, gs = sess.run(
+                            [train_step, loss, learning_rate, global_step],
+                            feed_dict=feed_dict
+                        )
+                        print('global %d, epoch %d, iter %d: loss %.4f, lr %.6e' %
+                            (gs, epoch, iter, loss_val, lr_now))
                 else:
                     sess.run(train_step, feed_dict=feed_dict)
 
