@@ -4,7 +4,6 @@ tf.disable_v2_behavior()
 import numpy as np
 
 from VGG import VGG16
-# from split_feature import split_feature
 
 
 def sinkhorn(log_alpha, n_iters=20):
