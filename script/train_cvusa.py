@@ -255,8 +255,8 @@ def train(start_epoch=0):
     grd_global_descriptor = np.zeros([input_data.get_test_dataset_size(), out_channel])
 
     loss = compute_loss(sat_global, grd_global, batch_hard_count=5)
-    # loss = nt_xent_loss(sat_global, grd_global, temperature=0.08)
-    # loss = circle_loss(sat_global, grd_global)
+    loss = nt_xent_loss(sat_global, grd_global, temperature=0.08)
+    loss = circle_loss(sat_global, grd_global)
 
     # set training
     # global_step = tf.Variable(0, trainable=False)
