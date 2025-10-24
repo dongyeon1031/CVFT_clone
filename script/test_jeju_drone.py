@@ -87,7 +87,7 @@ def save_tsne_plot(sat_feat, grd_feat, out_path="./tsne_embeddings.png",
     plt.close()
     print(f"[INFO] Saved t-SNE plot to {out_path}", flush=True)
 
-def _resolve_paths(row, img_root="../Data/jeju_drone"):
+def _resolve_paths(row, img_root="../Data/CVKR"):
     """
     row: list/tuple 또는 문자열.
       - 보통 ['bingmap/19/xxx.jpg','streetview/panos/xxx.jpg','xxx'] (3칸)
@@ -128,7 +128,7 @@ def _draw_border(ax, color="g", linewidth=4):
         spine.set_linewidth(linewidth)
 
 def visualize_random_retrieval(dist_array, input_data, top_k=5, num_queries=5, seed=2024,
-                               fixed_indices=None, img_root="../Data/jeju_drone"):
+                               fixed_indices=None, img_root="../Data/CVKR"):
     """
     dist_array: [N, N] (sat vs grd) ; (i,i)가 GT
     input_data: InputData 인스턴스 (get_test_list 사용)
@@ -136,7 +136,7 @@ def visualize_random_retrieval(dist_array, input_data, top_k=5, num_queries=5, s
     num_queries: 시각화할 쿼리 개수
     seed: 랜덤 시드 (fixed_indices 없을 때 사용)
     fixed_indices: 특정 쿼리 인덱스 리스트(옵션)
-    img_root: 이미지 루트 디렉토리 (예: ../Data/jeju_drone)
+    img_root: 이미지 루트 디렉토리 (예: ../Data/CVKR)
     """
     # 1) 테스트 리스트 확보
     test_list = input_data.get_test_list()
@@ -341,7 +341,8 @@ if __name__ == '__main__':
         print(network_type, ':')
         print('top1', ':', val_accuracy[0,1])
         print('top5', ':', val_accuracy[0,5])
-        print('top10', ':', val_accuracy[0,10])
+        print('top9', ':', val_accuracy[0,9])
+        # print('top10', ':', val_accuracy[0,10])
         print('top1%', ':', val_accuracy[0,-1])
         eval_loss = eval_soft_margin_triplet_loss(dist_array, loss_weight=10.0, batch_hard_k=0)
         print(f'eval soft-margin triplet loss: {eval_loss:.6f}')

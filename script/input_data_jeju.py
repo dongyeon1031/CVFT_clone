@@ -18,7 +18,7 @@ def transfer_image(img, t):
 
 class InputData:
 
-    img_root = '../Data/jeju_drone/'
+    img_root = '../Data/CVKR/'
 
 
     def __init__(self):
